@@ -1,0 +1,75 @@
+.app-layout {
+  display: flex;
+  width: 100vw;
+  height: 100vh;
+  overflow: hidden;
+}
+
+.cesium-panel {
+  flex: 1 1 auto;
+  position: relative;
+  min-width: 0;
+}
+
+.cesium-view {
+  width: 100%;
+  height: 100%;
+}
+
+.side-panel {
+  flex: 0 0 340px;
+  width: 340px;
+  height: 100%;
+  background: #12161b;
+  color: #e6e6e6;
+  padding: 1.5rem;
+  box-sizing: border-box;
+  border-left: 1px solid #262c33;
+  overflow-y: auto;
+}
+
+.side-panel h1 {
+  margin: 0;
+  font-size: 1.5rem;
+}
+
+.side-panel > p {
+  margin-top: 0.25rem;
+  color: #9aa4b0;
+}
+
+.side-panel-section {
+  margin-top: 1.75rem;
+  padding-top: 1rem;
+  border-top: 1px solid #262c33;
+}
+
+.side-panel-section h2 {
+  margin: 0 0 0.35rem;
+  font-size: 1rem;
+}
+
+.side-panel-section p {
+  margin: 0;
+  color: #9aa4b0;
+  font-size: 0.9rem;
+}
+
+.city-select-label {
+  display: block;
+  margin-bottom: 0.35rem;
+  font-size: 0.8rem;
+  color: #9aa4b0;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.city-select {
+  width: 100%;
+  padding: 0.5rem 0.6rem;
+  background: #1a1f26;
+  color: #e6e6e6;
+  border: 1px solid #333b45;
+  border-radius: 6px;
+  font-size: 0.95rem;
+}
