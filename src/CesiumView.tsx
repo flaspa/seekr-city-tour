@@ -141,6 +141,41 @@ function waitOneFrame(viewer: Cesium.Viewer): Promise<void> {
   })
 }
 
+// createGooglePhotorealistic3DTileset() resolving only means the tileset's
+// root metadata is usable - it says nothing about whether the tiles for the
+// CURRENT camera view have actually streamed in and rendered yet. tilesLoaded
+// is the live signal for that: true once every tile the current view needs
+// is loaded. Require two consecutive true frames (matches the documented
+// CesiumJS pattern for this) so a single stale/in-between frame doesn't
+// report ready too early. Resolves false on timeout or cancellation.
+function waitForTilesetView(
+  viewer: Cesium.Viewer,
+  tileset: Cesium.Cesium3DTileset,
+  isCancelled: () => boolean,
+  timeoutMs = 20000,
+): Promise<boolean> {
+  return new Promise((resolve) => {
+    let readyFrames = 0
+    const remove = viewer.scene.postRender.addEventListener(() => {
+      if (isCancelled()) {
+        window.clearTimeout(timeoutId)
+        remove()
+        resolve(false)
+        return
+      }
+      readyFrames = tileset.tilesLoaded ? readyFrames + 1 : 0
+      if (readyFrames < 2) return
+      window.clearTimeout(timeoutId)
+      remove()
+      resolve(true)
+    })
+    const timeoutId = window.setTimeout(() => {
+      remove()
+      resolve(false)
+    }, timeoutMs)
+  })
+}
+
 // Walks Seekr along `path` at a constant, deterministic pace, updating its
 // position/heading, the Idle/Walk animation, and the chase camera every
 // frame. Resolves once the destination is reached or the walk is cancelled.
@@ -429,7 +464,17 @@ export default function CesiumView({
               console.warn('Seekr idle animation unavailable:', error)
             }
             frameChaseCamera(viewer, readyModel)
-            onLoadingStageRef.current('ready')
+            waitForTilesetView(viewer, result, () => cancelled).then((loaded) => {
+              if (cancelled) return
+              if (loaded) {
+                onLoadingStageRef.current('ready')
+              } else {
+                onLoadingStageRef.current(
+                  'error',
+                  'City tiles took too long to load.',
+                )
+              }
+            })
           })
         })
         .catch((error: unknown) => {
@@ -485,7 +530,13 @@ export default function CesiumView({
       await waitOneFrame(viewer)
       if (cancelled) return
       frameChaseCamera(viewer, model)
-      onLoadingStageRef.current('ready')
+      const loaded = await waitForTilesetView(viewer, tileset, () => cancelled)
+      if (cancelled) return
+      if (loaded) {
+        onLoadingStageRef.current('ready')
+      } else {
+        onLoadingStageRef.current('error', 'City tiles took too long to load.')
+      }
     })()
 
     return () => {
