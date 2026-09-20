@@ -29,3 +29,20 @@ export const SEEKR_HEADING_DEG = 200
 export const CITY_BY_ID: Record<string, CityConfig> = Object.fromEntries(
   CITIES.map((city) => [city.id, city]),
 )
+
+// Small static list of nearby demo destinations per city, shown as clickable
+// suggestions under the destination input.
+export const SUGGESTED_DESTINATIONS: Record<string, string[]> = {
+  nyc: [
+    'Rockefeller Center',
+    'Bryant Park',
+    'Radio City Music Hall',
+    'Grand Central Terminal',
+  ],
+  la: [
+    'Grand Central Market',
+    'The Broad',
+    'Walt Disney Concert Hall',
+    'LA City Hall',
+  ],
+}

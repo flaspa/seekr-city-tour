@@ -1,8 +1,14 @@
 import { useRef, useState } from 'react'
 import './App.css'
-import CesiumView, { type NavStatus } from './CesiumView'
+import CesiumView, { type LoadingStage, type NavStatus } from './CesiumView'
 import StreetViewPanel from './StreetViewPanel'
-import { CITIES, CITY_BY_ID, DEFAULT_CITY_ID, SEEKR_HEADING_DEG } from './cities'
+import {
+  CITIES,
+  CITY_BY_ID,
+  DEFAULT_CITY_ID,
+  SEEKR_HEADING_DEG,
+  SUGGESTED_DESTINATIONS,
+} from './cities'
 import {
   haversineMeters,
   searchMemoriesRemotely,
@@ -40,6 +46,9 @@ function App() {
   const [navStatus, setNavStatus] = useState<NavStatus>('idle')
   const [navMessage, setNavMessage] = useState('')
   const [speedMultiplier, setSpeedMultiplier] = useState(1)
+
+  const [loadingStage, setLoadingStage] = useState<LoadingStage>('tiles')
+  const [loadingMessage, setLoadingMessage] = useState('Loading 3D city...')
 
   const [memories, setMemories] = useState<Memory[]>([])
   const [selectedMemoryId, setSelectedMemoryId] = useState<string | null>(
@@ -207,6 +216,15 @@ function App() {
     }
   }
 
+  const handleLoadingStageChange = (stage: LoadingStage, message?: string) => {
+    setLoadingStage(stage)
+    setLoadingMessage(message ?? 'Ready')
+  }
+
+  const handleSuggestionClick = (place: string) => {
+    setDestinationInput(place)
+  }
+
   const selectedMemory = memories.find((m) => m.id === selectedMemoryId) ?? null
   const visibleMemories = memorySearchIds
     ? memories.filter((m) => m.memoriesId && memorySearchIds.includes(m.memoriesId))
@@ -221,7 +239,17 @@ function App() {
           speedMultiplier={speedMultiplier}
           onSeekrUpdate={handleSeekrUpdate}
           onNavigationStatusChange={handleNavigationStatusChange}
+          onLoadingStageChange={handleLoadingStageChange}
         />
+        {loadingStage !== 'ready' && loadingStage !== 'error' && (
+          <div className="loading-overlay">
+            <div className="loading-spinner" />
+            <p className="loading-message">{loadingMessage}</p>
+          </div>
+        )}
+        {loadingStage === 'error' && (
+          <div className="loading-banner loading-banner-error">{loadingMessage}</div>
+        )}
       </main>
       <aside className="side-panel">
         <h1>Seekr</h1>
@@ -278,6 +306,20 @@ function App() {
             >
               Go
             </button>
+          </div>
+
+          <div className="nav-suggestions-row">
+            <span className="nav-suggestions-label">Try:</span>
+            {(SUGGESTED_DESTINATIONS[cityId] ?? []).map((place) => (
+              <button
+                key={place}
+                type="button"
+                className="nav-suggestion-chip"
+                onClick={() => handleSuggestionClick(place)}
+              >
+                {place}
+              </button>
+            ))}
           </div>
 
           <div className="nav-speed-row">

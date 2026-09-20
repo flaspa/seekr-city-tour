@@ -36,6 +36,8 @@ export type NavStatus =
   | 'arrived'
   | 'error'
 
+export type LoadingStage = 'city' | 'tiles' | 'seekr' | 'ready' | 'error'
+
 interface RoutePoint {
   lon: number
   lat: number
@@ -305,6 +307,7 @@ interface CesiumViewProps {
   speedMultiplier: number
   onSeekrUpdate: (lat: number, lon: number, headingDeg: number) => void
   onNavigationStatusChange: (status: NavStatus, message?: string) => void
+  onLoadingStageChange: (stage: LoadingStage, message?: string) => void
 }
 
 export default function CesiumView({
@@ -313,6 +316,7 @@ export default function CesiumView({
   speedMultiplier,
   onSeekrUpdate,
   onNavigationStatusChange,
+  onLoadingStageChange,
 }: CesiumViewProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const viewerRef = useRef<Cesium.Viewer | null>(null)
@@ -342,6 +346,10 @@ export default function CesiumView({
   useEffect(() => {
     onNavigationStatusRef.current = onNavigationStatusChange
   }, [onNavigationStatusChange])
+  const onLoadingStageRef = useRef(onLoadingStageChange)
+  useEffect(() => {
+    onLoadingStageRef.current = onLoadingStageChange
+  }, [onLoadingStageChange])
 
   // One-time setup: create the Viewer and load the tileset + Seekr model.
   useEffect(() => {
@@ -379,6 +387,8 @@ export default function CesiumView({
     // mount, synchronously). Deferring the tileset request lets the throwaway
     // first mount's cleanup cancel it via clearTimeout before it ever fires,
     // so only the real mount hits Google's rate-limited tile endpoint.
+    onLoadingStageRef.current('tiles', `Loading ${CITY_BY_ID[cityIdRef.current].label}...`)
+
     const startTilesetLoad = window.setTimeout(() => {
       setEstablishingView(viewer, CITY_BY_ID[cityIdRef.current])
 
@@ -389,6 +399,7 @@ export default function CesiumView({
           if (cancelled) return
           tilesetRef.current = result
           viewer.scene.primitives.add(result)
+          onLoadingStageRef.current('seekr', 'Loading Seekr...')
 
           const city = CITY_BY_ID[cityIdRef.current]
           const position = await computeGroundedPosition(viewer, city)
@@ -418,6 +429,7 @@ export default function CesiumView({
               console.warn('Seekr idle animation unavailable:', error)
             }
             frameChaseCamera(viewer, readyModel)
+            onLoadingStageRef.current('ready')
           })
         })
         .catch((error: unknown) => {
@@ -425,6 +437,7 @@ export default function CesiumView({
             'Failed to load Google Photorealistic 3D Tiles:',
             error,
           )
+          onLoadingStageRef.current('error', 'City failed to load.')
         })
     }, 0)
 
@@ -461,6 +474,7 @@ export default function CesiumView({
 
     let cancelled = false
     const city = CITY_BY_ID[cityId]
+    onLoadingStageRef.current('city', `Loading ${city.label}...`)
     setEstablishingView(viewer, city)
     ;(async () => {
       const position = await computeGroundedPosition(viewer, city)
@@ -471,6 +485,7 @@ export default function CesiumView({
       await waitOneFrame(viewer)
       if (cancelled) return
       frameChaseCamera(viewer, model)
+      onLoadingStageRef.current('ready')
     })()
 
     return () => {
