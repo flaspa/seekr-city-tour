@@ -128,12 +128,13 @@ async function askClaude(system, userMessage) {
 }
 
 function formatMemory(m) {
-  const place = m.destinationLabel || m.city || 'an unknown place'
+  const place = m.locationLabel || m.city || 'an unknown place'
   const when = m.timestamp ? new Date(m.timestamp).toLocaleString() : 'unknown time'
+  const description = m.description ? ` It showed: ${m.description}` : ''
   const notes = (m.notes ?? []).length
     ? ` User said there: ${m.notes.map((n) => `"${n}"`).join('; ')}.`
     : ''
-  return `- ${place} (${m.city}) at ${when}, coords ${m.lat?.toFixed(4)}, ${m.lon?.toFixed(4)}.${notes}`
+  return `- ${place} (${m.city}) at ${when}, coords ${m.lat?.toFixed(4)}, ${m.lon?.toFixed(4)}.${description}${notes}`
 }
 
 const app = express()
@@ -180,6 +181,64 @@ app.post('/api/memories', async (req, res) => {
     return res.json({ ok: true, memoriesId: uploadJson?.video_id ?? null, raw: uploadJson })
   } catch (error) {
     console.error('POST /api/memories failed:', error)
+    return res.status(500).json({ ok: false, error: String(error.message ?? error) })
+  }
+})
+
+// Generates a short, one-sentence description of what's visible in an
+// already-captured Street View image, via a single Claude vision call.
+// Fetches the image server-side so ANTHROPIC_API_KEY never needs to reach
+// the browser and no client-side image data crosses the wire twice.
+app.post('/api/describe-image', async (req, res) => {
+  if (!ANTHROPIC_API_KEY) {
+    return res.status(500).json({ ok: false, error: 'ANTHROPIC_API_KEY not configured' })
+  }
+
+  const { imageUrl } = req.body ?? {}
+  if (!imageUrl || typeof imageUrl !== 'string') {
+    return res.status(400).json({ ok: false, error: 'imageUrl is required' })
+  }
+
+  try {
+    const imageResponse = await fetch(imageUrl)
+    if (!imageResponse.ok) {
+      throw new Error(`Failed to fetch image (${imageResponse.status})`)
+    }
+    const contentType = imageResponse.headers.get('content-type') || 'image/jpeg'
+    const base64 = Buffer.from(await imageResponse.arrayBuffer()).toString('base64')
+
+    const response = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'x-api-key': ANTHROPIC_API_KEY,
+        'anthropic-version': '2023-06-01',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: CLAUDE_MODEL,
+        max_tokens: 60,
+        messages: [
+          {
+            role: 'user',
+            content: [
+              { type: 'image', source: { type: 'base64', media_type: contentType, data: base64 } },
+              {
+                type: 'text',
+                text: 'Describe only what is visibly shown in this street-level photo, in one concise sentence (10-25 words). Do not name the location or invent facts not visible in the image itself.',
+              },
+            ],
+          },
+        ],
+      }),
+    })
+    const json = await response.json().catch(() => null)
+    if (!response.ok) {
+      throw new Error(`Claude request failed (${response.status}): ${JSON.stringify(json)}`)
+    }
+    const description = (json?.content?.[0]?.text ?? '').trim()
+    return res.json({ ok: true, description })
+  } catch (error) {
+    console.error('POST /api/describe-image failed:', error)
     return res.status(500).json({ ok: false, error: String(error.message ?? error) })
   }
 })
@@ -252,7 +311,7 @@ app.post('/api/chat', async (req, res) => {
       const lower = message.toLowerCase()
       matched = localMemories.find(
         (m) =>
-          (m.destinationLabel && lower.includes(m.destinationLabel.toLowerCase())) ||
+          (m.locationLabel && lower.includes(m.locationLabel.toLowerCase())) ||
           (m.city && lower.includes(m.city.toLowerCase())),
       )
     }

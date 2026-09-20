@@ -10,7 +10,9 @@ import {
   SUGGESTED_DESTINATIONS,
 } from './cities'
 import {
+  describeMemoryImage,
   haversineMeters,
+  reverseGeocode,
   searchMemoriesRemotely,
   sendChatMessage,
   storeMemoryRemotely,
@@ -46,6 +48,8 @@ function App() {
   const [navStatus, setNavStatus] = useState<NavStatus>('idle')
   const [navMessage, setNavMessage] = useState('')
   const [speedMultiplier, setSpeedMultiplier] = useState(1)
+  const [stopSignal, setStopSignal] = useState(0)
+  const [resetSignal, setResetSignal] = useState(0)
 
   const [loadingStage, setLoadingStage] = useState<LoadingStage>('tiles')
   const [loadingMessage, setLoadingMessage] = useState('Loading 3D city...')
@@ -80,6 +84,9 @@ function App() {
   )
 
   const captureMemory = (reason: Memory['reason']) => {
+    // Always Seekr's live position at THIS moment - never the destination
+    // input, which may say something entirely different from where Seekr
+    // actually is (mid-route, after a manual capture, etc).
     const { lat, lon, headingDeg } = seekrPositionRef.current
     const memory: Memory = {
       id: `${Date.now()}-${Math.random().toString(36).slice(2)}`,
@@ -89,7 +96,10 @@ function App() {
       headingDeg,
       timestamp: Date.now(),
       city: CITY_BY_ID[cityId].label,
-      destinationLabel: destinationInput.trim() || null,
+      locationLabel: null,
+      locationStatus: 'pending',
+      description: null,
+      descriptionStatus: 'pending',
       reason,
       memoriesId: null,
       memoriesStatus: 'pending',
@@ -116,6 +126,54 @@ function App() {
           ),
         )
       })
+
+    // Fire-and-forget: reverse-geocode this memory's own capture coordinates
+    // into a human-readable label. Never blocks memory creation.
+    reverseGeocode(lat, lon)
+      .then((locationLabel) => {
+        setMemories((prev) =>
+          prev.map((m) =>
+            m.id === memory.id ? { ...m, locationLabel, locationStatus: 'resolved' } : m,
+          ),
+        )
+      })
+      .catch((error: unknown) => {
+        console.error('Reverse geocoding failed:', error)
+        setMemories((prev) =>
+          prev.map((m) =>
+            m.id === memory.id ? { ...m, locationStatus: 'error' } : m,
+          ),
+        )
+      })
+
+    // Fire-and-forget: ask the backend (Claude vision) for a short
+    // description of what's visible in the captured image.
+    describeMemoryImage(memory.imageUrl)
+      .then((description) => {
+        setMemories((prev) =>
+          prev.map((m) =>
+            m.id === memory.id ? { ...m, description, descriptionStatus: 'resolved' } : m,
+          ),
+        )
+      })
+      .catch((error: unknown) => {
+        console.error('Memory image description failed:', error)
+        setMemories((prev) =>
+          prev.map((m) =>
+            m.id === memory.id ? { ...m, descriptionStatus: 'error' } : m,
+          ),
+        )
+      })
+  }
+
+  const handleStop = () => {
+    setStopSignal((n) => n + 1)
+  }
+
+  const handleReset = () => {
+    setNavigationRequest(null)
+    setDestinationInput('')
+    setResetSignal((n) => n + 1)
   }
 
   const handleMemorySearch = () => {
@@ -237,6 +295,8 @@ function App() {
           cityId={cityId}
           navigationRequest={navigationRequest}
           speedMultiplier={speedMultiplier}
+          stopSignal={stopSignal}
+          resetSignal={resetSignal}
           onSeekrUpdate={handleSeekrUpdate}
           onNavigationStatusChange={handleNavigationStatusChange}
           onLoadingStageChange={handleLoadingStageChange}
@@ -348,6 +408,24 @@ function App() {
             ))}
           </div>
 
+          <div className="nav-control-row">
+            <button
+              type="button"
+              className="nav-stop-button"
+              onClick={handleStop}
+              disabled={
+                navStatus !== 'geocoding' &&
+                navStatus !== 'routing' &&
+                navStatus !== 'walking'
+              }
+            >
+              Stop
+            </button>
+            <button type="button" className="nav-reset-button" onClick={handleReset}>
+              Reset
+            </button>
+          </div>
+
           {navStatus !== 'idle' && (
             <p className="nav-status">
               {NAV_STATUS_MESSAGE[navStatus]}
@@ -418,11 +496,16 @@ function App() {
               <img
                 className="memory-preview-image"
                 src={selectedMemory.imageUrl}
-                alt={selectedMemory.destinationLabel ?? 'Seekr memory'}
+                alt={selectedMemory.locationLabel ?? 'Seekr memory'}
               />
               <p className="memory-preview-label">
-                {selectedMemory.destinationLabel ?? selectedMemory.city}
+                {selectedMemory.locationStatus === 'pending'
+                  ? 'Locating…'
+                  : selectedMemory.locationLabel ?? selectedMemory.city}
               </p>
+              {selectedMemory.description && (
+                <p className="memory-preview-description">{selectedMemory.description}</p>
+              )}
               <p className="memory-preview-meta">
                 {new Date(selectedMemory.timestamp).toLocaleTimeString()} ·{' '}
                 {selectedMemory.lat.toFixed(4)}, {selectedMemory.lon.toFixed(4)}
@@ -456,11 +539,16 @@ function App() {
                   <img
                     className="memory-thumb-image"
                     src={memory.imageUrl}
-                    alt={memory.destinationLabel ?? 'Seekr memory'}
+                    alt={memory.locationLabel ?? 'Seekr memory'}
                   />
                   <span className="memory-thumb-label">
-                    {memory.destinationLabel ?? memory.city}
+                    {memory.locationStatus === 'pending'
+                      ? 'Locating…'
+                      : memory.locationLabel ?? memory.city}
                   </span>
+                  {memory.description && (
+                    <span className="memory-thumb-description">{memory.description}</span>
+                  )}
                   <span className="memory-thumb-time">
                     {new Date(memory.timestamp).toLocaleTimeString()}
                   </span>
@@ -487,7 +575,7 @@ function App() {
                       <img
                         className="chat-message-image"
                         src={memory.imageUrl}
-                        alt={memory.destinationLabel ?? 'Seekr memory'}
+                        alt={memory.locationLabel ?? 'Seekr memory'}
                       />
                     )}
                   </div>

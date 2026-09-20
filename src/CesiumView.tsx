@@ -377,6 +377,8 @@ interface CesiumViewProps {
   cityId: string
   navigationRequest: { query: string } | null
   speedMultiplier: number
+  stopSignal: number
+  resetSignal: number
   onSeekrUpdate: (lat: number, lon: number, headingDeg: number) => void
   onNavigationStatusChange: (status: NavStatus, message?: string) => void
   onLoadingStageChange: (stage: LoadingStage, message?: string) => void
@@ -386,6 +388,8 @@ export default function CesiumView({
   cityId,
   navigationRequest,
   speedMultiplier,
+  stopSignal,
+  resetSignal,
   onSeekrUpdate,
   onNavigationStatusChange,
   onLoadingStageChange,
@@ -398,6 +402,7 @@ export default function CesiumView({
   // Seekr's live geographic position/heading - the route origin for the next
   // "Go", and what drives the throttled Street View sync during a walk.
   const currentPositionRef = useRef<RoutePoint>({ lon: 0, lat: 0 })
+  const currentHeadingRef = useRef(SEEKR_HEADING_DEG)
   const activeWalkAbortRef = useRef<{ cancelled: boolean } | null>(null)
 
   // Always readable synchronously from async callbacks/loops, so the latest
@@ -666,6 +671,7 @@ export default function CesiumView({
           abortState,
           (lon, lat, headingDeg) => {
             currentPositionRef.current = { lon, lat }
+            currentHeadingRef.current = headingDeg
             const now = performance.now()
             // Throttled well below Street View's request rate limit - each
             // sync triggers several panorama sub-requests internally.
@@ -679,6 +685,7 @@ export default function CesiumView({
         viewer.scene.screenSpaceCameraController.enableInputs = true
         if (!abortState.cancelled) {
           const finalPos = currentPositionRef.current
+          currentHeadingRef.current = SEEKR_HEADING_DEG
           onSeekrUpdateRef.current(finalPos.lat, finalPos.lon, SEEKR_HEADING_DEG)
           onNavigationStatusRef.current('arrived')
         }
@@ -698,6 +705,79 @@ export default function CesiumView({
       abortState.cancelled = true
     }
   }, [navigationRequest])
+
+  // Stop: cancel any active walk in place. walkRoute's postUpdate listener
+  // already checks abortState.cancelled at the top of each frame and resolves
+  // without writing a further modelMatrix, so Seekr simply stays exactly
+  // where the last completed frame left it - no teleport. This just also
+  // forces the Idle animation, re-enables free camera input, and syncs
+  // Street View/App state to that exact stopped position.
+  useEffect(() => {
+    if (stopSignal === 0) return
+    if (activeWalkAbortRef.current) activeWalkAbortRef.current.cancelled = true
+
+    const viewer = viewerRef.current
+    const model = seekrModelRef.current
+    if (viewer) viewer.scene.screenSpaceCameraController.enableInputs = true
+    if (model) {
+      try {
+        model.activeAnimations.removeAll()
+        model.activeAnimations.add({
+          name: 'Idle',
+          loop: Cesium.ModelAnimationLoop.REPEAT,
+        })
+      } catch (error) {
+        console.warn('Seekr idle animation unavailable:', error)
+      }
+      if (viewer) frameChaseCamera(viewer, model)
+    }
+    const pos = currentPositionRef.current
+    onSeekrUpdateRef.current(pos.lat, pos.lon, currentHeadingRef.current)
+    onNavigationStatusRef.current('idle')
+  }, [stopSignal])
+
+  // Reset: cancel any active walk, then return Seekr to the selected city's
+  // configured starting point - reusing the exact same repositioning steps
+  // as the city-switch effect above (grounded position, modelMatrix, wait a
+  // frame, reframe chase camera), minus waitForTilesetView since the start
+  // location's tiles are already loaded.
+  useEffect(() => {
+    if (resetSignal === 0) return
+    if (activeWalkAbortRef.current) activeWalkAbortRef.current.cancelled = true
+
+    const viewer = viewerRef.current
+    const model = seekrModelRef.current
+    if (!viewer || !model) return
+
+    let cancelled = false
+    const city = CITY_BY_ID[cityIdRef.current]
+    ;(async () => {
+      const position = await computeGroundedPosition(viewer, city)
+      if (cancelled) return
+      model.modelMatrix = seekrModelMatrix(position, SEEKR_HEADING_DEG)
+      try {
+        model.activeAnimations.removeAll()
+        model.activeAnimations.add({
+          name: 'Idle',
+          loop: Cesium.ModelAnimationLoop.REPEAT,
+        })
+      } catch (error) {
+        console.warn('Seekr idle animation unavailable:', error)
+      }
+      currentPositionRef.current = { lon: city.longitude, lat: city.latitude }
+      currentHeadingRef.current = SEEKR_HEADING_DEG
+      onSeekrUpdateRef.current(city.latitude, city.longitude, SEEKR_HEADING_DEG)
+      await waitOneFrame(viewer)
+      if (cancelled) return
+      viewer.scene.screenSpaceCameraController.enableInputs = true
+      frameChaseCamera(viewer, model)
+      onNavigationStatusRef.current('idle')
+    })()
+
+    return () => {
+      cancelled = true
+    }
+  }, [resetSignal])
 
   return <div ref={containerRef} className="cesium-view" />
 }

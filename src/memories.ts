@@ -1,3 +1,5 @@
+import { loadGeocodingLibrary } from './googleMaps'
+
 export interface Memory {
   id: string
   imageUrl: string
@@ -6,7 +8,14 @@ export interface Memory {
   headingDeg: number
   timestamp: number
   city: string
-  destinationLabel: string | null
+  // Human-readable label for THIS memory's actual capture coordinates
+  // (reverse-geocoded), never the route origin/destination text.
+  locationLabel: string | null
+  locationStatus: 'pending' | 'resolved' | 'error'
+  // One-sentence description of what's visible in the captured image,
+  // generated once at capture time via the backend's Claude vision call.
+  description: string | null
+  descriptionStatus: 'pending' | 'resolved' | 'error'
   reason: 'periodic' | 'arrival' | 'manual'
   memoriesId: string | null
   memoriesStatus: 'pending' | 'stored' | 'error'
@@ -20,6 +29,55 @@ const GOOGLE_MAPS_API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY as
 const MEMORY_API_BASE_URL = import.meta.env.VITE_MEMORY_API_BASE_URL as
   | string
   | undefined
+
+// Strips the trailing ", USA"/", United States" and a trailing ZIP code so
+// the label stays close to the examples in the spec (street/venue, city)
+// rather than a full postal address.
+function simplifyFormattedAddress(address: string): string {
+  return address
+    .replace(/,\s*(United States|USA)$/i, '')
+    .replace(/,?\s*\d{5}(-\d{4})?$/, '')
+    .trim()
+}
+
+// Reverse-geocodes Seekr's actual capture-time coordinates into a concise,
+// human-readable label via the existing Google Geocoder (already used
+// elsewhere in the app for forward geocoding) - no new API/key needed.
+// Never blocks memory creation: callers treat this as fire-and-forget and
+// fall back to formatted coordinates on any failure.
+export async function reverseGeocode(lat: number, lon: number): Promise<string> {
+  const fallback = `${lat.toFixed(5)}, ${lon.toFixed(5)}`
+  if (!GOOGLE_MAPS_API_KEY) return fallback
+  try {
+    const { Geocoder } = await loadGeocodingLibrary(GOOGLE_MAPS_API_KEY)
+    const response = await new Geocoder().geocode({ location: { lat, lng: lon } })
+    const result = response.results[0]
+    if (!result?.formatted_address) return fallback
+    return simplifyFormattedAddress(result.formatted_address)
+  } catch (error) {
+    console.warn('Reverse geocoding failed:', error)
+    return fallback
+  }
+}
+
+// Asks the backend for a short, one-sentence description of what's visible
+// in the captured Street View image. Backend keeps ANTHROPIC_API_KEY
+// server-side; this never touches the key directly.
+export async function describeMemoryImage(imageUrl: string): Promise<string> {
+  if (!MEMORY_API_BASE_URL) {
+    throw new Error('VITE_MEMORY_API_BASE_URL is not configured')
+  }
+  const response = await fetch(`${MEMORY_API_BASE_URL}/api/describe-image`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ imageUrl }),
+  })
+  const json = await response.json().catch(() => null)
+  if (!response.ok || !json?.ok) {
+    throw new Error(json?.error ?? `Describe request failed (${response.status})`)
+  }
+  return json.description ?? ''
+}
 
 // Sends the already-captured image (no new Street View request) to our
 // backend, which uploads/indexes it in the Memories.ai private library.
@@ -35,7 +93,7 @@ export async function storeMemoryRemotely(memory: Memory): Promise<string | null
       lon: memory.lon,
       timestamp: memory.timestamp,
       city: memory.city,
-      destinationLabel: memory.destinationLabel,
+      locationLabel: memory.locationLabel,
     }),
   })
   const json = await response.json().catch(() => null)
@@ -114,7 +172,8 @@ export async function sendChatMessage(
         id: m.id,
         memoriesId: m.memoriesId,
         city: m.city,
-        destinationLabel: m.destinationLabel,
+        locationLabel: m.locationLabel,
+        description: m.description,
         lat: m.lat,
         lon: m.lon,
         timestamp: m.timestamp,
