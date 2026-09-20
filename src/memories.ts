@@ -10,6 +10,7 @@ export interface Memory {
   reason: 'periodic' | 'arrival' | 'manual'
   memoriesId: string | null
   memoriesStatus: 'pending' | 'stored' | 'error'
+  notes: string[]
 }
 
 const GOOGLE_MAPS_API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY as
@@ -85,6 +86,47 @@ export function streetViewImageUrl(
     params.set('location', `${lat},${lon}`)
   }
   return `https://maps.googleapis.com/maps/api/streetview?${params}`
+}
+
+export interface ChatReply {
+  answer: string
+  memoryId?: string
+}
+
+// Sends the user's message plus local memory metadata/notes to our backend,
+// which grounds the reply via Memories.ai search + Claude. No Anthropic or
+// Memories.ai credentials touch the browser.
+export async function sendChatMessage(
+  message: string,
+  currentMemoryId: string | null,
+  memories: Memory[],
+): Promise<ChatReply> {
+  if (!MEMORY_API_BASE_URL) {
+    throw new Error('VITE_MEMORY_API_BASE_URL is not configured')
+  }
+  const response = await fetch(`${MEMORY_API_BASE_URL}/api/chat`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      message,
+      currentMemoryId,
+      memories: memories.map((m) => ({
+        id: m.id,
+        memoriesId: m.memoriesId,
+        city: m.city,
+        destinationLabel: m.destinationLabel,
+        lat: m.lat,
+        lon: m.lon,
+        timestamp: m.timestamp,
+        notes: m.notes,
+      })),
+    }),
+  })
+  const json = await response.json().catch(() => null)
+  if (!response.ok || !json?.answer) {
+    throw new Error(json?.error ?? `Chat request failed (${response.status})`)
+  }
+  return { answer: json.answer, memoryId: json.memoryId }
 }
 
 export function haversineMeters(

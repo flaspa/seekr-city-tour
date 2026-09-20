@@ -6,6 +6,7 @@ import { CITIES, CITY_BY_ID, DEFAULT_CITY_ID, SEEKR_HEADING_DEG } from './cities
 import {
   haversineMeters,
   searchMemoriesRemotely,
+  sendChatMessage,
   storeMemoryRemotely,
   streetViewImageUrl,
   type Memory,
@@ -50,6 +51,16 @@ function App() {
   >('idle')
   const [memorySearchIds, setMemorySearchIds] = useState<string[] | null>(null)
 
+  interface ChatMessage {
+    id: string
+    role: 'user' | 'seekr'
+    text: string
+    memoryId?: string
+  }
+  const [chatInput, setChatInput] = useState('')
+  const [chatMessages, setChatMessages] = useState<ChatMessage[]>([])
+  const [chatSending, setChatSending] = useState(false)
+
   // Refs mirror state that capture logic needs to read synchronously
   // (outside React's render/batching timing) at the moment an event fires.
   const seekrPositionRef = useRef(seekrPosition)
@@ -73,6 +84,7 @@ function App() {
       reason,
       memoriesId: null,
       memoriesStatus: 'pending',
+      notes: [],
     }
     setMemories((prev) => [memory, ...prev])
     lastPeriodicCaptureRef.current = { lat, lon }
@@ -116,6 +128,48 @@ function App() {
         console.error('Memories.ai search failed:', error)
         setMemorySearchStatus('error')
       })
+  }
+
+  const handleChatSend = () => {
+    const text = chatInput.trim()
+    if (!text || chatSending) return
+    setChatInput('')
+
+    const userMsgId = `${Date.now()}-u`
+    setChatMessages((prev) => [...prev, { id: userMsgId, role: 'user', text }])
+
+    // Associate the message with the current/nearest memory (most recently
+    // captured one) - no new memory architecture, just an existing field.
+    const currentMemory = memories[0] ?? null
+    if (currentMemory) {
+      setMemories((prev) =>
+        prev.map((m) =>
+          m.id === currentMemory.id ? { ...m, notes: [...m.notes, text] } : m,
+        ),
+      )
+    }
+
+    setChatSending(true)
+    sendChatMessage(text, currentMemory?.id ?? null, memories)
+      .then((reply) => {
+        setChatMessages((prev) => [
+          ...prev,
+          {
+            id: `${Date.now()}-s`,
+            role: 'seekr',
+            text: reply.answer,
+            memoryId: reply.memoryId,
+          },
+        ])
+      })
+      .catch((error: unknown) => {
+        console.error('Chat failed:', error)
+        setChatMessages((prev) => [
+          ...prev,
+          { id: `${Date.now()}-s`, role: 'seekr', text: 'Sorry, I could not respond.' },
+        ])
+      })
+      .finally(() => setChatSending(false))
   }
 
   const handleGo = () => {
@@ -367,7 +421,49 @@ function App() {
 
         <div className="side-panel-section">
           <h2>Chat</h2>
-          <p>Conversational recall coming soon.</p>
+          <div className="chat-history">
+            {chatMessages.length === 0 ? (
+              <p>Ask Seekr about the trip.</p>
+            ) : (
+              chatMessages.map((msg) => {
+                const memory = msg.memoryId
+                  ? memories.find((m) => m.id === msg.memoryId)
+                  : null
+                return (
+                  <div key={msg.id} className={`chat-message chat-message-${msg.role}`}>
+                    <p className="chat-message-text">{msg.text}</p>
+                    {memory && (
+                      <img
+                        className="chat-message-image"
+                        src={memory.imageUrl}
+                        alt={memory.destinationLabel ?? 'Seekr memory'}
+                      />
+                    )}
+                  </div>
+                )
+              })
+            )}
+          </div>
+          <div className="chat-input-row">
+            <input
+              type="text"
+              className="chat-input"
+              placeholder="Message Seekr…"
+              value={chatInput}
+              onChange={(event) => setChatInput(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') handleChatSend()
+              }}
+            />
+            <button
+              type="button"
+              className="chat-send-button"
+              onClick={handleChatSend}
+              disabled={chatSending}
+            >
+              Send
+            </button>
+          </div>
         </div>
       </aside>
     </div>
