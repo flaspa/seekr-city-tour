@@ -176,19 +176,108 @@ function waitForTilesetView(
   })
 }
 
-// Walks Seekr along `path` at a constant, deterministic pace, updating its
-// position/heading, the Idle/Walk animation, and the chase camera every
-// frame. Resolves once the destination is reached or the walk is cancelled.
+interface GroundedWaypoint {
+  lon: number
+  lat: number
+  height: number
+}
+
+// Every original route vertex (turn) is kept exactly, with intermediate
+// points inserted along long segments so no gap exceeds ~10-20m.
+const ROUTE_WAYPOINT_STEP_METERS = 15
+
+function resampleRoutePoints(path: RoutePoint[]): RoutePoint[] {
+  const result: RoutePoint[] = [path[0]]
+  for (let i = 1; i < path.length; i++) {
+    const p0 = path[i - 1]
+    const p1 = path[i]
+    const segLen = Cesium.Cartesian3.distance(
+      Cesium.Cartesian3.fromDegrees(p0.lon, p0.lat),
+      Cesium.Cartesian3.fromDegrees(p1.lon, p1.lat),
+    )
+    const steps = Math.max(1, Math.round(segLen / ROUTE_WAYPOINT_STEP_METERS))
+    for (let s = 1; s <= steps; s++) {
+      const f = s / steps
+      result.push({
+        lon: p0.lon + (p1.lon - p0.lon) * f,
+        lat: p0.lat + (p1.lat - p0.lat) * f,
+      })
+    }
+  }
+  return result
+}
+
+// Ground every route waypoint ONCE, before Seekr starts walking - adapted
+// from Min's la-ai-navigator waypoint-height approach (sample per waypoint
+// up front, then just interpolate lat/lon/height while walking) rather than
+// resampling continuously during motion.
+async function buildGroundedWaypoints(
+  viewer: Cesium.Viewer,
+  path: RoutePoint[],
+): Promise<GroundedWaypoint[]> {
+  const points = resampleRoutePoints(path)
+  const cartographics = points.map((p) =>
+    Cesium.Cartographic.fromDegrees(p.lon, p.lat),
+  )
+
+  if (viewer.scene.sampleHeightSupported) {
+    try {
+      await viewer.scene.sampleHeightMostDetailed(cartographics)
+    } catch (error) {
+      console.warn('Route waypoint height sampling failed:', error)
+    }
+  }
+
+  const heights: (number | undefined)[] = cartographics.map((c) =>
+    Number.isFinite(c.height) ? c.height : undefined,
+  )
+  // A waypoint whose sample failed borrows the nearest neighbor's height
+  // instead of falling back to a continuous runtime sampler.
+  for (let i = 0; i < heights.length; i++) {
+    if (heights[i] !== undefined) continue
+    let before = -1
+    for (let j = i - 1; j >= 0; j--) {
+      if (heights[j] !== undefined) {
+        before = j
+        break
+      }
+    }
+    let after = -1
+    for (let j = i + 1; j < heights.length; j++) {
+      if (heights[j] !== undefined) {
+        after = j
+        break
+      }
+    }
+    if (before !== -1 && after !== -1) {
+      heights[i] = i - before <= after - i ? heights[before] : heights[after]
+    } else if (before !== -1) {
+      heights[i] = heights[before]
+    } else if (after !== -1) {
+      heights[i] = heights[after]
+    } else {
+      heights[i] = FALLBACK_GROUND_HEIGHT
+    }
+  }
+
+  return points.map((p, i) => ({ lon: p.lon, lat: p.lat, height: heights[i]! }))
+}
+
+// Walks Seekr along already-grounded `waypoints` at a constant, deterministic
+// pace, interpolating position/height/heading, the Idle/Walk animation, and
+// the chase camera every frame. No height sampling happens during this loop -
+// every waypoint's height was already resolved by buildGroundedWaypoints.
+// Resolves once the destination is reached or the walk is cancelled.
 function walkRoute(
   viewer: Cesium.Viewer,
   model: Cesium.Model,
-  path: RoutePoint[],
+  waypoints: GroundedWaypoint[],
   speedMultiplierRef: { current: number },
   abortState: { cancelled: boolean },
   onTick: (lon: number, lat: number, headingDeg: number) => void,
 ): Promise<void> {
   return new Promise((resolve) => {
-    const cartesianPoints = path.map((p) =>
+    const cartesianPoints = waypoints.map((p) =>
       Cesium.Cartesian3.fromDegrees(p.lon, p.lat),
     )
     const segmentLengths: number[] = []
@@ -199,59 +288,8 @@ function walkRoute(
     }
     const totalDistance = segmentLengths.reduce((a, b) => a + b, 0)
 
-    const startTranslation = Cesium.Matrix4.getTranslation(
-      model.modelMatrix,
-      new Cesium.Cartesian3(),
-    )
-    let currentHeight = Cesium.Cartographic.fromCartesian(
-      startTranslation,
-    ).height
-
     let traveled = 0
     let lastTime = performance.now()
-    let heightSampleInFlight = false
-
-    // As Seekr's tight chase camera continuously reveals fresh ground ahead,
-    // sampleHeightMostDetailed sometimes resolves against a coarser,
-    // not-yet-refined 3D Tile (a bounding proxy that encloses the real
-    // street geometry from above) before the leaf-level tile finishes
-    // streaming in, then snaps back down once it does. That error is
-    // one-directional - always high, never below the true surface - so a
-    // short rolling minimum recovers the real ground height and rides out
-    // the transient highs without needing to guess which sample is "right".
-    const HEIGHT_SAMPLE_WINDOW = 8
-    let recentHeights: number[] = []
-
-    // sampleHeightMostDetailed forces the actual tileset geometry to be
-    // used regardless of what the tight chase camera currently has
-    // on-screen (unlike the synchronous Scene.sampleHeight/clampToHeight,
-    // which only intersect whatever is already rendered in view and can
-    // pick up unrelated geometry - e.g. a nearby building - for a fast,
-    // narrowly-framed moving target). Only one request is kept in flight;
-    // the next one fires for wherever Seekr currently is as soon as it
-    // resolves, so sampling adapts to how fast tiles actually load instead
-    // of lagging behind a fixed timer.
-    function requestHeightSample(lon: number, lat: number) {
-      if (heightSampleInFlight || !viewer.scene.sampleHeightSupported) return
-      heightSampleInFlight = true
-      const cartographic = Cesium.Cartographic.fromDegrees(lon, lat)
-      viewer.scene
-        .sampleHeightMostDetailed([cartographic])
-        .then(() => {
-          heightSampleInFlight = false
-          if (abortState.cancelled || !Number.isFinite(cartographic.height)) {
-            return
-          }
-          recentHeights.push(cartographic.height)
-          if (recentHeights.length > HEIGHT_SAMPLE_WINDOW) {
-            recentHeights.shift()
-          }
-          currentHeight = Math.min(...recentHeights)
-        })
-        .catch(() => {
-          heightSampleInFlight = false
-        })
-    }
 
     let animName: string | null = null
     let animMultiplier = 1
@@ -286,8 +324,8 @@ function walkRoute(
       traveled += BASE_WALK_SPEED_MPS * speedMultiplierRef.current * dt
 
       if (traveled >= totalDistance) {
-        const last = path[path.length - 1]
-        const prev = path[path.length - 2]
+        const last = waypoints[waypoints.length - 1]
+        const prev = waypoints[waypoints.length - 2]
         const headingDeg = computeBearingDeg(
           prev.lon,
           prev.lat,
@@ -295,7 +333,7 @@ function walkRoute(
           last.lat,
         )
         model.modelMatrix = seekrModelMatrix(
-          Cesium.Cartesian3.fromDegrees(last.lon, last.lat, currentHeight),
+          Cesium.Cartesian3.fromDegrees(last.lon, last.lat, last.height),
           headingDeg,
         )
         setAnim('Idle')
@@ -317,16 +355,15 @@ function walkRoute(
       }
       const segLen = segmentLengths[segIndex] || 1
       const f = Math.min(1, distIntoSeg / segLen)
-      const p0 = path[segIndex]
-      const p1 = path[segIndex + 1]
+      const p0 = waypoints[segIndex]
+      const p1 = waypoints[segIndex + 1]
       const lon = p0.lon + (p1.lon - p0.lon) * f
       const lat = p0.lat + (p1.lat - p0.lat) * f
+      const height = p0.height + (p1.height - p0.height) * f
       const headingDeg = computeBearingDeg(p0.lon, p0.lat, p1.lon, p1.lat)
 
-      requestHeightSample(lon, lat)
-
       model.modelMatrix = seekrModelMatrix(
-        Cesium.Cartesian3.fromDegrees(lon, lat, currentHeight),
+        Cesium.Cartesian3.fromDegrees(lon, lat, height),
         headingDeg,
       )
       setAnim('Walk', speedMultiplierRef.current)
@@ -612,6 +649,11 @@ export default function CesiumView({
           .map((p) => ({ lon: p.lng(), lat: p.lat() }))
         if (path.length < 2) throw new Error('Route has no walkable geometry')
 
+        // Ground every route waypoint once, up front, before any animation
+        // starts - no height sampling happens during the walk itself.
+        const waypoints = await buildGroundedWaypoints(viewer, path)
+        if (abortState.cancelled) return
+
         onNavigationStatusRef.current('walking')
         viewer.scene.screenSpaceCameraController.enableInputs = false
 
@@ -619,7 +661,7 @@ export default function CesiumView({
         await walkRoute(
           viewer,
           model,
-          path,
+          waypoints,
           speedMultiplierRef,
           abortState,
           (lon, lat, headingDeg) => {
