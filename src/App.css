@@ -433,29 +433,24 @@
 }
 
 .nav-suggestions-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 0.35rem;
   margin-top: 0.5rem;
 }
 
 .nav-suggestions-label {
-  font-size: 0.8rem;
+  display: block;
+  margin-bottom: 0.3rem;
+  font-size: 0.75rem;
   color: #9aa4b0;
-  margin-right: 0.1rem;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
-.nav-suggestion-chip {
-  padding: 0.25rem 0.55rem;
+.nav-suggestions-select {
+  width: 100%;
+  padding: 0.4rem 0.5rem;
   background: #1a1f26;
   color: #e6e6e6;
   border: 1px solid #333b45;
-  border-radius: 999px;
-  font-size: 0.78rem;
-  cursor: pointer;
-}
-
-.nav-suggestion-chip:hover {
-  border-color: #2f6feb;
+  border-radius: 6px;
+  font-size: 0.85rem;
 }

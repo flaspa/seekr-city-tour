@@ -309,17 +309,26 @@ function App() {
           </div>
 
           <div className="nav-suggestions-row">
-            <span className="nav-suggestions-label">Try:</span>
-            {(SUGGESTED_DESTINATIONS[cityId] ?? []).map((place) => (
-              <button
-                key={place}
-                type="button"
-                className="nav-suggestion-chip"
-                onClick={() => handleSuggestionClick(place)}
-              >
-                {place}
-              </button>
-            ))}
+            <label className="nav-suggestions-label" htmlFor="nav-suggestions-select">
+              Suggested destinations
+            </label>
+            <select
+              id="nav-suggestions-select"
+              className="nav-suggestions-select"
+              value=""
+              onChange={(event) => {
+                if (event.target.value) handleSuggestionClick(event.target.value)
+              }}
+            >
+              <option value="" disabled>
+                Choose a suggestion…
+              </option>
+              {(SUGGESTED_DESTINATIONS[cityId] ?? []).map((place) => (
+                <option key={place} value={place}>
+                  {place}
+                </option>
+              ))}
+            </select>
           </div>
 
           <div className="nav-speed-row">
