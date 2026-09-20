@@ -36,11 +36,29 @@ memories, and chat.
    VITE_GOOGLE_MAPS_API_KEY=your-key-here
    ```
 
-5. Start the dev server:
+5. Add a Memories.ai API key (server-side only, do **not** prefix with
+   `VITE_`) from https://memories.ai/app/service/key:
+
+   ```
+   MEMORIES_API_KEY=your-key-here
+   ```
+
+6. Start the memories backend (separate terminal):
+
+   ```bash
+   cd server
+   npm install
+   npm run dev
+   ```
+
+7. Start the frontend dev server:
 
    ```bash
    npm run dev
    ```
+
+The frontend calls the backend at `VITE_MEMORY_API_BASE_URL`
+(`http://localhost:8787` by default locally, already set in `.env.example`).
 
 ## Stack
 
@@ -48,6 +66,16 @@ memories, and chat.
 - CesiumJS via `vite-plugin-cesium`
 - Google Photorealistic 3D Tiles (loaded through Cesium ion)
 - Google Maps JavaScript API (`streetView` library) for the Seekr Vision panel
+- `server/` — a tiny Express backend that keeps `MEMORIES_API_KEY` off the
+  browser and proxies memory upload/search to Memories.ai
+
+## Deployment
+
+- Frontend: Render **Static Site**, build `npm run build`, publish `dist/`.
+  Env var: `VITE_MEMORY_API_BASE_URL` set to the deployed backend's URL
+  (plus the existing `VITE_CESIUM_ION_TOKEN` / `VITE_GOOGLE_MAPS_API_KEY`).
+- Backend (`server/`): Render **Web Service**, build `npm install`, start
+  `npm start`. Env var: `MEMORIES_API_KEY` (server-side only).
 
 ## Assets
 

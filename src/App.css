@@ -180,6 +180,54 @@
   cursor: pointer;
 }
 
+.memory-search-row {
+  display: flex;
+  gap: 0.4rem;
+  margin-top: 0.6rem;
+}
+
+.memory-search-input {
+  flex: 1 1 auto;
+  min-width: 0;
+  padding: 0.5rem 0.6rem;
+  background: #1a1f26;
+  color: #e6e6e6;
+  border: 1px solid #333b45;
+  border-radius: 6px;
+  font-size: 0.9rem;
+}
+
+.memory-search-button {
+  flex: 0 0 auto;
+  padding: 0.5rem 0.9rem;
+  background: #1a1f26;
+  color: #e6e6e6;
+  border: 1px solid #333b45;
+  border-radius: 6px;
+  font-size: 0.9rem;
+  cursor: pointer;
+}
+
+.memory-search-button:disabled {
+  cursor: not-allowed;
+  opacity: 0.6;
+}
+
+.memory-search-status {
+  margin: 0.4rem 0 0;
+  font-size: 0.8rem;
+  color: #9aa4b0;
+}
+
+.memory-search-clear {
+  background: none;
+  border: none;
+  color: #2f6feb;
+  cursor: pointer;
+  padding: 0;
+  font-size: 0.8rem;
+}
+
 .memory-preview {
   position: relative;
   margin-top: 0.75rem;

@@ -5,6 +5,8 @@ import StreetViewPanel from './StreetViewPanel'
 import { CITIES, CITY_BY_ID, DEFAULT_CITY_ID, SEEKR_HEADING_DEG } from './cities'
 import {
   haversineMeters,
+  searchMemoriesRemotely,
+  storeMemoryRemotely,
   streetViewImageUrl,
   type Memory,
 } from './memories'
@@ -42,6 +44,11 @@ function App() {
   const [selectedMemoryId, setSelectedMemoryId] = useState<string | null>(
     null,
   )
+  const [memorySearchInput, setMemorySearchInput] = useState('')
+  const [memorySearchStatus, setMemorySearchStatus] = useState<
+    'idle' | 'searching' | 'error'
+  >('idle')
+  const [memorySearchIds, setMemorySearchIds] = useState<string[] | null>(null)
 
   // Refs mirror state that capture logic needs to read synchronously
   // (outside React's render/batching timing) at the moment an event fires.
@@ -64,9 +71,51 @@ function App() {
       city: CITY_BY_ID[cityId].label,
       destinationLabel: destinationInput.trim() || null,
       reason,
+      memoriesId: null,
+      memoriesStatus: 'pending',
     }
     setMemories((prev) => [memory, ...prev])
     lastPeriodicCaptureRef.current = { lat, lon }
+
+    // Fire-and-forget: local memory already exists and is shown; the
+    // Memories.ai identifier attaches asynchronously once upload completes.
+    storeMemoryRemotely(memory)
+      .then((memoriesId) => {
+        setMemories((prev) =>
+          prev.map((m) =>
+            m.id === memory.id ? { ...m, memoriesId, memoriesStatus: 'stored' } : m,
+          ),
+        )
+      })
+      .catch((error: unknown) => {
+        console.error('Memories.ai store failed:', error)
+        setMemories((prev) =>
+          prev.map((m) =>
+            m.id === memory.id ? { ...m, memoriesStatus: 'error' } : m,
+          ),
+        )
+      })
+  }
+
+  const handleMemorySearch = () => {
+    const query = memorySearchInput.trim()
+    if (!query) {
+      setMemorySearchIds(null)
+      setMemorySearchStatus('idle')
+      return
+    }
+    setMemorySearchStatus('searching')
+    searchMemoriesRemotely(query)
+      .then((matches) => {
+        setMemorySearchIds(
+          matches.map((m) => m.id).filter((id): id is string => Boolean(id)),
+        )
+        setMemorySearchStatus('idle')
+      })
+      .catch((error: unknown) => {
+        console.error('Memories.ai search failed:', error)
+        setMemorySearchStatus('error')
+      })
   }
 
   const handleGo = () => {
@@ -105,6 +154,9 @@ function App() {
   }
 
   const selectedMemory = memories.find((m) => m.id === selectedMemoryId) ?? null
+  const visibleMemories = memorySearchIds
+    ? memories.filter((m) => m.memoriesId && memorySearchIds.includes(m.memoriesId))
+    : memories
 
   return (
     <div className="app-layout">
@@ -209,6 +261,46 @@ function App() {
             Remember this
           </button>
 
+          <div className="memory-search-row">
+            <input
+              type="text"
+              className="memory-search-input"
+              placeholder="Search memories…"
+              value={memorySearchInput}
+              onChange={(event) => setMemorySearchInput(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === 'Enter') handleMemorySearch()
+              }}
+            />
+            <button
+              type="button"
+              className="memory-search-button"
+              onClick={handleMemorySearch}
+              disabled={memorySearchStatus === 'searching'}
+            >
+              Search
+            </button>
+          </div>
+          {memorySearchStatus === 'error' && (
+            <p className="memory-search-status">Search failed.</p>
+          )}
+          {memorySearchIds && (
+            <p className="memory-search-status">
+              {visibleMemories.length} matching{' '}
+              {visibleMemories.length === 1 ? 'memory' : 'memories'}.{' '}
+              <button
+                type="button"
+                className="memory-search-clear"
+                onClick={() => {
+                  setMemorySearchInput('')
+                  setMemorySearchIds(null)
+                }}
+              >
+                Clear
+              </button>
+            </p>
+          )}
+
           {selectedMemory && (
             <div className="memory-preview">
               <button
@@ -230,14 +322,26 @@ function App() {
                 {new Date(selectedMemory.timestamp).toLocaleTimeString()} ·{' '}
                 {selectedMemory.lat.toFixed(4)}, {selectedMemory.lon.toFixed(4)}
               </p>
+              <p className="memory-preview-meta">
+                Memories.ai:{' '}
+                {selectedMemory.memoriesStatus === 'stored'
+                  ? `stored (${selectedMemory.memoriesId})`
+                  : selectedMemory.memoriesStatus === 'error'
+                    ? 'not stored (error)'
+                    : 'storing…'}
+              </p>
             </div>
           )}
 
-          {memories.length === 0 ? (
-            <p>No memories captured yet.</p>
+          {visibleMemories.length === 0 ? (
+            <p>
+              {memorySearchIds
+                ? 'No matching memories.'
+                : 'No memories captured yet.'}
+            </p>
           ) : (
             <div className="memory-grid">
-              {memories.map((memory) => (
+              {visibleMemories.map((memory) => (
                 <button
                   key={memory.id}
                   type="button"
